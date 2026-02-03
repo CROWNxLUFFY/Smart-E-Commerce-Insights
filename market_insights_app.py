@@ -6,9 +6,8 @@ from statsmodels.tsa.arima.model import ARIMA
 import plotly.graph_objects as go
 import time
 
-# ---------------------------------
-# Helper: Auto-detect columns
-# ---------------------------------
+# Auto-detect columns
+
 def detect_column(columns, keywords):
     for col in columns:
         for key in keywords:
@@ -16,9 +15,8 @@ def detect_column(columns, keywords):
                 return col
     return None
 
-# ---------------------------------
-# Helper: Dynamic cluster labels
-# ---------------------------------
+# Dynamic cluster labels
+
 def get_dynamic_labels(k):
     label_sets = {
         2: ["Low Value", "High Value"],
@@ -31,15 +29,13 @@ def get_dynamic_labels(k):
     }
     return label_sets.get(k, [f"Segment {i+1}" for i in range(k)])
 
-# ---------------------------------
 # Page Config
-# ---------------------------------
+
 st.set_page_config(page_title="Market Insights", layout="wide")
 st.title("📊 Market Insights – Interactive E-Commerce Analytics Platform")
 
-# ---------------------------------
-# PERMANENT USER INSTRUCTIONS (FIXED)
-# ---------------------------------
+# USER INSTRUCTIONS
+
 st.info("""
 ### 📄 Dataset Requirements
 
@@ -53,8 +49,6 @@ Your CSV should contain **transaction-level data** with:
 
 📌 Additional columns like City, State, Country, Branch are optional and will be ignored.
 """)
-
-# ✅ THIS IS THE PART YOU ASKED FOR (NOW PERMANENT)
 with st.expander("📘 How to prepare your CSV file"):
     st.write("""
     1. Each row should represent **one purchase transaction**  
@@ -64,9 +58,8 @@ with st.expander("📘 How to prepare your CSV file"):
     5. Column names do **NOT** have to be exact — you can map them manually
     """)
 
-# ---------------------------------
 # Upload Dataset
-# ---------------------------------
+
 uploaded_file = st.file_uploader("⬆️ Upload your CSV file", type=["csv"])
 
 if uploaded_file:
@@ -137,9 +130,8 @@ if uploaded_file:
         ["📁 Dataset Overview", "👥 Segmentation", "📦 Recommendations", "📈 Forecast"]
     )
 
-    # ===============================
     # TAB 1: DATASET OVERVIEW
-    # ===============================
+
     with tab1:
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Customers", df["CustomerID"].nunique())
@@ -148,9 +140,8 @@ if uploaded_file:
         col4.metric("Transactions", len(df))
         st.dataframe(df.head())
 
-    # ===============================
     # TAB 2: SEGMENTATION
-    # ===============================
+    
     with tab2:
         cust_features = df.groupby("CustomerID").agg({
             "Quantity": "sum",
@@ -181,9 +172,8 @@ if uploaded_file:
                 cust_features[["CustomerID", "Quantity", "Price", "Customer Segment"]]
             )
 
-    # ===============================
     # TAB 3: RECOMMENDATIONS
-    # ===============================
+    
     with tab3:
         basket = (
             df.groupby(["CustomerID", "Product"])["Quantity"]
@@ -209,9 +199,8 @@ if uploaded_file:
 
             st.write("🎯 Recommended Products:", list(rec - set(bought)) or "No recommendations found")
 
-    # ===============================
     # TAB 4: FORECAST (INTERACTIVE)
-    # ===============================
+    
     with tab4:
         if st.button("📈 Forecast Sales"):
             with st.spinner("Generating interactive forecast..."):
@@ -253,3 +242,4 @@ if uploaded_file:
 
 else:
     st.warning("Please upload a CSV file to begin analysis.")
+
