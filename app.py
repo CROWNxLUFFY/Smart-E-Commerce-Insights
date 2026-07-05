@@ -5,9 +5,19 @@ from mlxtend.frequent_patterns import apriori, association_rules
 from statsmodels.tsa.arima.model import ARIMA
 import plotly.graph_objects as go
 import os
+import uuid
+from io import BytesIO
+from supabase import create_client
 
 app = Flask(__name__)
 app.secret_key = "market_insights_secret_key"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
 
 # Auto Detect Columns
 def detect_column(columns, keywords):
@@ -31,6 +41,61 @@ def get_dynamic_labels(k):
         [f"Segment {i+1}" for i in range(k)]
     )
 
+def generate_forecast(df, date_col, quantity_col, price_col):
+
+    forecast_chart = None
+    forecast_message = None
+
+    if not date_col or not price_col:
+        return forecast_chart, forecast_message
+
+    try:
+
+        forecast_df = df.copy()
+
+        forecast_df[date_col] = pd.to_datetime(
+            forecast_df[date_col],
+            errors="coerce"
+        )
+
+        forecast_df.dropna(
+            subset=[date_col],
+            inplace=True
+        )
+
+        forecast_df["Sales"] = (
+            forecast_df[quantity_col]
+            * forecast_df[price_col]
+        )
+
+        sales_ts = (
+            forecast_df.groupby(
+                forecast_df[date_col].dt.to_period("M")
+            )["Sales"]
+            .sum()
+        )
+
+        sales_ts.index = sales_ts.index.to_timestamp()
+
+        if len(sales_ts) < 6:
+            return None, "At least 6 months of data required."
+
+        model = ARIMA(
+            sales_ts,
+            order=(1,1,1)
+        )
+
+        forecast = (
+            model.fit()
+            .forecast(steps=6)
+        )
+
+        return sales_ts, forecast
+
+    except Exception as e:
+
+        return None, str(e)
+
 @app.route("/", methods=["GET", "POST"])
 def home():
 
@@ -52,13 +117,18 @@ def home():
     forecast_message = None
 
     # CUSTOMER RECOMMENDATION BUTTON
-    if request.method == "POST" and "selected_customer" in request.form and "uploaded_csv" in session:
+    if request.method == "POST" and "selected_customer" in request.form and "csv_file" in session:
 
         selected_customer = request.form.get("selected_customer")
 
-        if "uploaded_csv" in session:
+        if "csv_file" in session:
 
-            df = pd.read_json(session["uploaded_csv"])
+            csv_filename = session["csv_file"]
+
+            response = supabase.storage.from_("datasets").download(csv_filename)
+
+            df = pd.read_csv(BytesIO(response))
+
             filename = "Uploaded Dataset"
 
             columns = df.columns.tolist()
@@ -86,6 +156,96 @@ def home():
                 columns,
                 ["quantity", "qty", "count"]
             )
+            sales_ts, forecast = generate_forecast(
+                df,
+                date_col,
+                quantity_col,
+                price_col
+            )
+
+            if sales_ts is not None:
+
+                fig = go.Figure()
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=sales_ts.index,
+                        y=sales_ts.values,
+                        mode="lines+markers",
+                        name="Historical Sales",
+                        line=dict(
+                            color="#4F46E5",
+                            width=4,
+                            shape="spline"
+                        ),
+                        marker=dict(
+                            size=8,
+                            color="#4F46E5",
+                            line=dict(
+                                color="white",
+                                width=2
+                            )
+                        ),
+                        fill="tozeroy",
+                        fillcolor="rgba(79,70,229,0.08)"
+                    )
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=forecast.index,
+                        y=forecast.values,
+                        mode="lines+markers",
+                        name="Forecasted Sales",
+                        line=dict(
+                            color="#06B6D4",
+                            width=4,
+                            dash="dash",
+                            shape="spline"
+                        ),
+                        marker=dict(
+                            size=8,
+                            color="#06B6D4",
+                            line=dict(
+                                color="white",
+                                width=2
+                            )
+                        )
+                    )
+                )
+
+                fig.add_shape(
+                    type="line",
+                    x0=forecast.index[0],
+                    x1=forecast.index[0],
+                    y0=min(sales_ts.min(), forecast.min()),
+                    y1=max(sales_ts.max(), forecast.max()),
+                    line=dict(
+                        color="red",
+                        width=2,
+                        dash="dash"
+                    )
+                )
+
+                fig.update_layout(
+                    title=dict(
+                        text="📈 AI Sales Forecast",
+                        x=0.5
+                    ),
+                    template="plotly_white",
+                    height=600,
+                    hovermode="x unified",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="white"
+                )
+
+                forecast_chart = fig.to_html(
+                    full_html=False,
+                    config={
+                        "displayModeBar": False,
+                        "responsive": True
+                    }
+                )
 
             customers = sorted(
                 df[customer_col]
@@ -231,78 +391,6 @@ def home():
                             ]
                             .to_html(index=False)
                         )
-                        if date_col and price_col:
-
-                            try:
-
-                                forecast_df = df.copy()
-
-                                forecast_df[date_col] = pd.to_datetime(
-                                    forecast_df[date_col],
-                                    errors="coerce"
-                                )
-
-                                forecast_df.dropna(
-                                    subset=[date_col],
-                                    inplace=True
-                                )
-
-                                forecast_df["Sales"] = (
-                                    forecast_df[quantity_col]
-                                    * forecast_df[price_col]
-                                )
-
-                                sales_ts = (
-                                    forecast_df.groupby(
-                                        forecast_df[date_col]
-                                        .dt.to_period("M")
-                                    )["Sales"]
-                                    .sum()
-                                )
-
-                                sales_ts.index = (
-                                    sales_ts.index.to_timestamp()
-                                )
-
-                                if len(sales_ts) >= 6:
-
-                                    model = ARIMA(
-                                        sales_ts,
-                                        order=(1,1,1)
-                                    )
-
-                                    forecast = (
-                                        model.fit()
-                                        .forecast(steps=6)
-                                    )
-
-                                    fig = go.Figure()
-
-                                    fig.add_trace(
-                                        go.Scatter(
-                                            x=sales_ts.index,
-                                            y=sales_ts.values,
-                                            mode="lines+markers",
-                                            name="Historical Sales"
-                                        )
-                                    )   
-
-                                    fig.add_trace(
-                                        go.Scatter(
-                                            x=forecast.index,
-                                            y=forecast.values,
-                                            mode="lines+markers",
-                                            name="Forecasted Sales"
-                                        )
-                                    )
-
-                                    forecast_chart = fig.to_html(
-                                        full_html=False
-                                    )
-
-                            except Exception as e:
-
-                                forecast_message = str(e)
 
     # FILE UPLOAD
     elif request.method == "POST":
@@ -311,12 +399,19 @@ def home():
 
         if file and file.filename.endswith(".csv"):
 
-            from io import BytesIO
+            file_content = file.read()
 
-            file_bytes = BytesIO(file.read())
+            df = pd.read_csv(BytesIO(file_content))
 
-            df = pd.read_csv(file_bytes)
-            session["uploaded_csv"] = df.to_json()
+            unique_filename = f"{uuid.uuid4()}.csv"
+
+            supabase.storage.from_("datasets").upload(
+                unique_filename,
+                file_content,
+                {"content-type": "text/csv"}
+            )
+
+            session["csv_file"] = unique_filename
 
             filename = file.filename
 
@@ -461,177 +556,96 @@ def home():
                             ]
                             .to_html(index=False)
                         )
-                        if date_col and price_col:
-                            try:
-                                forecast_df = df.copy()
-                                forecast_df[date_col] = pd.to_datetime(
-                                    forecast_df[date_col],
-                                    errors="coerce"
-                                )
-                                forecast_df.dropna(
-                                    subset=[date_col],
-                                    inplace=True
-                                )
-                                forecast_df["Sales"] = (
-                                     forecast_df[quantity_col]
-                                    * forecast_df[price_col]
-                                )
-                                sales_ts = (
-                                    forecast_df.groupby(
-                                        forecast_df[date_col].dt.to_period("M")
-                                    )["Sales"]
-                                    .sum()
-                                )
+                        sales_ts, forecast = generate_forecast(
+                            df,
+                            date_col,
+                            quantity_col,
+                            price_col
+                        )
 
-                                sales_ts.index = sales_ts.index.to_timestamp()
+                        if sales_ts is not None:
 
-                                if len(sales_ts) >= 6:
+                            fig = go.Figure()
 
-                                    model = ARIMA(
-                                        sales_ts,
-                                        order=(1, 1, 1)
-                                    )
-
-                                    forecast = (
-                                        model.fit()
-                                        .forecast(steps=6)
-                                    )
-
-                                    fig = go.Figure()
-
-                                    fig.add_trace(
-                                        go.Scatter(
-                                            x=sales_ts.index,
-                                            y=sales_ts.values,
-                                            mode="lines+markers",
-                                            name="Historical Sales",
-                                            line=dict(
-                                                color="#4F46E5",
-                                                width=4,
-                                                shape="spline"
-                                            ),
-                                            marker=dict(
-                                                size=8,
-                                                color="#4F46E5",
-                                                line=dict(
-                                                    color="white",
-                                                    width=2
-                                                )
-                                            ),
-                                            fill="tozeroy",
-                                            fillcolor="rgba(79,70,229,0.08)"
-                                        )
-                                    )
-
-                                    fig.add_trace(
-                                    go.Scatter(
-                                        x=forecast.index,
-                                        y=forecast.values,
-                                        mode="lines+markers",
-                                        name="Forecasted Sales",
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=sales_ts.index,
+                                    y=sales_ts.values,
+                                    mode="lines+markers",
+                                    name="Historical Sales",
+                                    line=dict(
+                                        color="#4F46E5",
+                                        width=4,
+                                        shape="spline"
+                                    ),
+                                    marker=dict(
+                                        size=8,
+                                        color="#4F46E5",
                                         line=dict(
-                                            color="#06B6D4",
-                                            width=4,
-                                            dash="dash",
-                                            shape="spline"
-                                        ),
-                                        marker=dict(
-                                            size=8,
-                                            color="#06B6D4",
-                                            line=dict(
-                                                color="white",
-                                                width=2
-                                                )
-                                            )
+                                            color="white",
+                                            width=2
                                         )
-                                    )
+                                    ),
+                                    fill="tozeroy",
+                                    fillcolor="rgba(79,70,229,0.08)"
+                                )
+                            )
 
-                                    fig.add_shape(
-                                        type="line",
-                                        x0=forecast.index[0].to_pydatetime(),
-                                        x1=forecast.index[0].to_pydatetime(),
-                                        y0=min(sales_ts.min(), forecast.min()),
-                                        y1=max(sales_ts.max(), forecast.max()),
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=forecast.index,
+                                    y=forecast.values,
+                                    mode="lines+markers",
+                                    name="Forecasted Sales",
+                                    line=dict(
+                                        color="#06B6D4",
+                                        width=4,
+                                        dash="dash",
+                                        shape="spline"
+                                    ),
+                                    marker=dict(
+                                        size=8,
+                                        color="#06B6D4",
                                         line=dict(
-                                            color="red",
-                                            width=2,
-                                            dash="dash"
+                                            color="white",
+                                            width=2
                                         )
                                     )
+                                )
+                            )
 
-                                    fig.update_layout(
+                            fig.add_shape(
+                                type="line",
+                                x0=forecast.index[0],
+                                x1=forecast.index[0],
+                                y0=min(sales_ts.min(), forecast.min()),
+                                y1=max(sales_ts.max(), forecast.max()),
+                                line=dict(
+                                    color="red",
+                                    width=2,
+                                    dash="dash"
+                                )
+                            )
 
-                                        title=dict(
-                                            text="📈 AI Sales Forecast",
-                                            x=0.5,
-                                            font=dict(
-                                                family="Poppins",
-                                                size=26,
-                                                color="#111827"
-                                            )
-                                        ),
+                            fig.update_layout(
+                                title=dict(
+                                    text="📈 AI Sales Forecast",
+                                    x=0.5
+                                ),
+                                template="plotly_white",
+                                height=600,
+                                hovermode="x unified",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="white"
+                            )
 
-                                        template="plotly_white",
-
-                                        height=600,
-
-                                        hovermode="x unified",
-
-                                        paper_bgcolor="rgba(0,0,0,0)",
-
-                                        plot_bgcolor="white",
-
-                                        font=dict(
-                                            family="Poppins",
-                                            size=14
-                                        ),
-
-                                        legend=dict(
-                                            orientation="h",
-                                            y=1.08,
-                                            x=1,
-                                            xanchor="right",
-                                            bgcolor="rgba(255,255,255,0.7)"
-                                        ),
-
-                                        margin=dict(
-                                            l=30,
-                                            r=30,
-                                            t=70,
-                                            b=30
-                                        ),
-
-                                        xaxis=dict(
-                                            title="Month",
-                                            showgrid=True,
-                                            gridcolor="rgba(0,0,0,0.05)",
-                                            zeroline=False
-                                        ),
-
-                                        yaxis=dict(
-                                            title="Sales",
-                                            showgrid=True,
-                                            gridcolor="rgba(0,0,0,0.05)",
-                                            zeroline=False
-                                        )
-                                    )
-
-                                    forecast_chart = fig.to_html(
-                                        full_html=False,
-                                        config={
-                                            "displayModeBar": False,
-                                            "responsive": True
-                                        }
-                                    )
-
-                                else:
-
-                                    forecast_message = (
-                                        "At least 6 months of data required."
-                                    )
-
-                            except Exception as e:
-                                forecast_message = str(e)
+                            forecast_chart = fig.to_html(
+                                full_html=False,
+                                config={
+                                    "displayModeBar": False,
+                                    "responsive": True
+                                }
+                            )
 
             else:
 
