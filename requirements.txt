@@ -1,6 +1,8 @@
-streamlit
+Flask
 pandas
+numpy
 scikit-learn
 mlxtend
 statsmodels
 plotly
+gunicorn
