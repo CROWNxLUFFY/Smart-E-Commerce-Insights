@@ -6,3 +6,4 @@ mlxtend
 statsmodels
 plotly
 gunicorn
+supabase
