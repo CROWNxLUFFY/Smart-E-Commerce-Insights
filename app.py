@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, session
 import pandas as pd
 from sklearn.cluster import KMeans
 from mlxtend.frequent_patterns import apriori, association_rules
@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import os
 
 app = Flask(__name__)
+app.secret_key = "market_insights_secret_key"
 
 # Auto Detect Columns
 def detect_column(columns, keywords):
@@ -51,14 +52,14 @@ def home():
     forecast_message = None
 
     # CUSTOMER RECOMMENDATION BUTTON
-    if request.method == "POST" and "selected_customer" in request.form and os.path.exists("uploaded_data.csv"):
+    if request.method == "POST" and "selected_customer" in request.form and "uploaded_csv" in session:
 
         selected_customer = request.form.get("selected_customer")
 
-        if os.path.exists("uploaded_data.csv"):
+        if "uploaded_csv" in session:
 
-            df = pd.read_csv("uploaded_data.csv")
-            filename = "uploaded_data.csv"
+            df = pd.read_json(session["uploaded_csv"])
+            filename = "Uploaded Dataset"
 
             columns = df.columns.tolist()
             price_col = detect_column(
@@ -310,9 +311,12 @@ def home():
 
         if file and file.filename.endswith(".csv"):
 
-            file.save("uploaded_data.csv")
+            from io import BytesIO
 
-            df = pd.read_csv("uploaded_data.csv")
+            file_bytes = BytesIO(file.read())
+
+            df = pd.read_csv(file_bytes)
+            session["uploaded_csv"] = df.to_json()
 
             filename = file.filename
 
